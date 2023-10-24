@@ -42,6 +42,8 @@ pub fn main() !void {
             var image = try zigimg.Image.fromFile(alloc, @constCast(file));
             var iter = image.iterator();
 
+            var buffer = std.io.bufferedWriter(std.io.getStdOut().writer());
+
             while (iter.next()) |pix| {
                 const avg = 1.0 / @as(f32, chars.len);
                 var pix_value = (pix.r + pix.b + pix.g) / 3;
@@ -50,14 +52,15 @@ pub fn main() !void {
                     index -= 1;
                 }
 
-                print("{c}", .{arr[index]});
+                _ = try buffer.write(&[_]u8{arr[index]});
 
                 if (iter.current_index % image.width == 0) {
-                    print("\n", .{});
+                    _ = try buffer.write(&[_]u8{'\n'});
                 }
             }
 
             try std.fs.Dir.deleteFile(std.fs.cwd(), ".temp.png");
+            try buffer.flush();
             // std.time.sleep(10_000_000);
         } else |err| switch (err) {
             error.FileNotFound => std.os.exit(0),
@@ -92,11 +95,11 @@ fn clearTty(alloc: std.mem.Allocator) !void {
     _ = try proc.wait();
 }
 
-fn makeFrame(alloc: std.mem.Allocator, frame: usize) !void {
-    const filter = try std.fmt.allocPrint(alloc, "select=eq(n\\, {})", .{frame});
+fn makeFrame(alloc: std.mem.Allocator, start: usize, num: usize) !void {
+    const filter = try std.fmt.allocPrint(alloc, "select=eq(n\\, {})", .{start});
     defer alloc.free(filter);
 
-    var proc = std.ChildProcess.init(&.{ "ffmpeg", "-i", ".temp.mp4", "-vf", filter, "-frames:v", "1", ".temp.png" }, alloc);
+    var proc = std.ChildProcess.init(&.{ "ffmpeg", "-i", ".temp.mp4", "-vf", filter, "-frames:v", num, ".temp.png" }, alloc);
     proc.stdout_behavior = .Ignore;
     proc.stderr_behavior = .Ignore;
     try proc.spawn();
