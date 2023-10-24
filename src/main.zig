@@ -7,7 +7,6 @@ const print = std.debug.print;
 const stdout = std.io.getStdOut().writer();
 
 const chars = " .:-=+*#%$8@";
-const arr = strToArr(chars);
 
 const Err = error{MissingArguments};
 pub fn main() !void {
@@ -15,76 +14,54 @@ pub fn main() !void {
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    var alloc = gpa.allocator();
+    var allocator = gpa.allocator();
 
-    const args = try std.process.argsAlloc(alloc);
-    defer std.process.argsFree(alloc, args);
+    const args = try std.process.argsAlloc(allocator);
+    defer std.process.argsFree(allocator, args);
 
     if (args.len < 2) {
         log.err("usage: vid_to_ascii path_to_video", .{});
         return Err.MissingArguments;
     }
 
+    std.fs.cwd().makeDir(".temp") catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+
     const file_url = args[1];
-    try resizeVideo(alloc, file_url);
 
-    var frame: usize = 1;
-    while (true) : (frame += 1) {
-        const filter = try std.fmt.allocPrint(alloc, "select=eq(n\\, {})", .{frame});
-        defer alloc.free(filter);
+    // resize video to terminal size
+    try resizeVideo(allocator, file_url);
 
-        try makeFrame(alloc, frame);
+    var front_buffer: std.ArrayList(u8) = undefined;
+    var back_buffer: std.ArrayList(u8) = undefined;
 
-        if (std.fs.cwd().openFile(".temp.png", .{})) |*file| {
-            try clearTty(alloc);
-            defer file.close();
+    var frame: usize = 0;
+    while (true) : (frame += 2) {
+        try makeImage(allocator, frame);
+        front_buffer = try imageToFrame(allocator, ".temp/.temp0.png");
 
-            var image = try zigimg.Image.fromFile(alloc, @constCast(file));
-            var iter = image.iterator();
+        try makeImage(allocator, frame + 1);
+        back_buffer = try imageToFrame(allocator, ".temp/.temp1.png");
+        print("{s}", .{front_buffer.items});
+        // var buffer = try createBuffer(alloc, ".temp.png", &buffers);
+        // try clearTty(allocator);
 
-            var buffer = std.io.bufferedWriter(std.io.getStdOut().writer());
-
-            while (iter.next()) |pix| {
-                const avg = 1.0 / @as(f32, chars.len);
-                var pix_value = (pix.r + pix.b + pix.g) / 3;
-                var index: usize = @intFromFloat(pix_value / avg);
-                if (index == arr.len) {
-                    index -= 1;
-                }
-
-                _ = try buffer.write(&[_]u8{arr[index]});
-
-                if (iter.current_index % image.width == 0) {
-                    _ = try buffer.write(&[_]u8{'\n'});
-                }
-            }
-
-            try std.fs.Dir.deleteFile(std.fs.cwd(), ".temp.png");
-            try buffer.flush();
-            // std.time.sleep(10_000_000);
-        } else |err| switch (err) {
-            error.FileNotFound => std.os.exit(0),
-            else => {},
-        }
+        // try std.fs.Dir.deleteFile(std.fs.cwd(), ".temp/.temp.png");
+        // try buffer.flush();
+        // std.time.sleep(10_000);
     }
 
     removeTempFiles();
 }
 
-fn strToArr(comptime str: []const u8) [str.len]u8 {
-    var result: [str.len]u8 = undefined;
-    for (str, 0..) |ch, i| {
-        result[i] = ch;
-    }
-    return result;
-}
-
 fn removeTempFiles() void {
-    std.fs.Dir.deleteFile(std.fs.cwd(), ".temp.png") catch |err| switch (err) {
+    std.fs.Dir.deleteFile(std.fs.cwd(), ".temp/.temp.png") catch |err| switch (err) {
         else => {},
     };
 
-    std.fs.Dir.deleteFile(std.fs.cwd(), ".temp.mp4") catch |err| switch (err) {
+    std.fs.Dir.deleteFile(std.fs.cwd(), ".temp/.temp.mp4") catch |err| switch (err) {
         else => {},
     };
 }
@@ -95,19 +72,8 @@ fn clearTty(alloc: std.mem.Allocator) !void {
     _ = try proc.wait();
 }
 
-fn makeFrame(alloc: std.mem.Allocator, frame: usize) !void {
-    const filter = try std.fmt.allocPrint(alloc, "select=eq(n\\, {})", .{frame});
-    defer alloc.free(filter);
-
-    var proc = std.ChildProcess.init(&.{ "ffmpeg", "-i", ".temp.mp4", "-vf", filter, "-frames:v", "1", ".temp.png" }, alloc);
-    proc.stdout_behavior = .Ignore;
-    proc.stderr_behavior = .Ignore;
-    try proc.spawn();
-    _ = try proc.wait();
-}
-
-fn resizeVideo(alloc: std.mem.Allocator, file_url: []const u8) !void {
-    var terminal_size = try terminal.getTerminalSize();
+fn getEvenTtySize(size: terminal.TerminalSize) terminal.TerminalSize {
+    var terminal_size = size;
     if (terminal_size.rows % 2 != 0) {
         terminal_size.rows -= 1;
     }
@@ -115,12 +81,57 @@ fn resizeVideo(alloc: std.mem.Allocator, file_url: []const u8) !void {
         terminal_size.cols -= 1;
     }
 
-    const size = try std.fmt.allocPrint(alloc, "scale={}:{}", .{ terminal_size.cols, terminal_size.rows });
-    defer alloc.free(size);
+    return terminal_size;
+}
 
-    var proc = std.ChildProcess.init(&.{ "ffmpeg", "-i", file_url, "-vf", size, ".temp.mp4" }, alloc);
+fn makeImage(allocator: std.mem.Allocator, frame: usize) !void {
+    const filter = try std.fmt.allocPrint(allocator, "select=eq(n\\, {})", .{frame});
+    const output = try std.fmt.allocPrint(allocator, ".temp/.temp{}.png", .{frame});
+    defer allocator.free(filter);
+    defer allocator.free(output);
+
+    var proc = std.ChildProcess.init(&.{ "ffmpeg", "-i", ".temp/.temp.mp4", "-vf", filter, "-frames:v", "1", output }, allocator);
     proc.stdout_behavior = .Ignore;
     proc.stderr_behavior = .Ignore;
     try proc.spawn();
     _ = try proc.wait();
+}
+
+fn resizeVideo(alloc: std.mem.Allocator, file_url: []const u8) !void {
+    var terminal_size = getEvenTtySize(try terminal.getTerminalSize());
+
+    const size = try std.fmt.allocPrint(alloc, "scale={}:{}", .{ terminal_size.rows, terminal_size.cols });
+    defer alloc.free(size);
+
+    var proc = std.ChildProcess.init(&.{ "ffmpeg", "-i", file_url, "-vf", size, ".temp/.temp.mp4" }, alloc);
+    proc.stdout_behavior = .Ignore;
+    proc.stderr_behavior = .Ignore;
+    try proc.spawn();
+    _ = try proc.wait();
+}
+
+fn imageToFrame(allocator: std.mem.Allocator, file_name: []const u8) !std.ArrayList(u8) {
+    var image = try zigimg.Image.fromFilePath(allocator, file_name);
+    var buffer = std.ArrayList(u8).init(allocator);
+
+    var iter = image.iterator();
+    while (iter.next()) |pix| {
+        const avg = 1.0 / @as(f32, chars.len);
+        const i = iter.current_index;
+        var pix_value = (pix.r + pix.b + pix.g) / 3;
+        var index: usize = @intFromFloat(pix_value / avg);
+        if (index == chars.len) {
+            index -= 1;
+        }
+
+        if (i % image.width == 0) {
+            try buffer.append('\n');
+        } else {
+            try buffer.append(chars[index]);
+        }
+    }
+
+    print("here", .{});
+
+    return buffer;
 }
