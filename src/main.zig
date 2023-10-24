@@ -95,11 +95,11 @@ fn clearTty(alloc: std.mem.Allocator) !void {
     _ = try proc.wait();
 }
 
-fn makeFrame(alloc: std.mem.Allocator, start: usize, num: usize) !void {
-    const filter = try std.fmt.allocPrint(alloc, "select=eq(n\\, {})", .{start});
+fn makeFrame(alloc: std.mem.Allocator, frame: usize) !void {
+    const filter = try std.fmt.allocPrint(alloc, "select=eq(n\\, {})", .{frame});
     defer alloc.free(filter);
 
-    var proc = std.ChildProcess.init(&.{ "ffmpeg", "-i", ".temp.mp4", "-vf", filter, "-frames:v", num, ".temp.png" }, alloc);
+    var proc = std.ChildProcess.init(&.{ "ffmpeg", "-i", ".temp.mp4", "-vf", filter, "-frames:v", "1", ".temp.png" }, alloc);
     proc.stdout_behavior = .Ignore;
     proc.stderr_behavior = .Ignore;
     try proc.spawn();
