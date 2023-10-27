@@ -1,6 +1,7 @@
 const std = @import("std");
 const zigimg = @import("zigimg");
 const terminal = @import("terminal.zig");
+const frame_pak = @import("frame.zig");
 
 const log = std.log;
 const print = std.debug.print;
@@ -23,34 +24,26 @@ pub fn main() !void {
         log.err("usage: vid_to_ascii path_to_video", .{});
         return Err.MissingArguments;
     }
+    const file_url = args[1];
 
     std.fs.cwd().makeDir(".temp") catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
 
-    const file_url = args[1];
-
     // resize video to terminal size
     try resizeVideo(allocator, file_url);
 
-    var front_buffer: std.ArrayList(u8) = undefined;
-    var back_buffer: std.ArrayList(u8) = undefined;
+    var queue = std.atomic.Queue(frame_pak.Frame).init();
 
-    var frame: usize = 0;
-    while (true) : (frame += 2) {
-        try makeImage(allocator, frame);
-        front_buffer = try imageToFrame(allocator, ".temp/.temp0.png");
-
-        try makeImage(allocator, frame + 1);
-        back_buffer = try imageToFrame(allocator, ".temp/.temp1.png");
-        print("{s}", .{front_buffer.items});
-        // var buffer = try createBuffer(alloc, ".temp.png", &buffers);
-        // try clearTty(allocator);
-
-        // try std.fs.Dir.deleteFile(std.fs.cwd(), ".temp/.temp.png");
-        // try buffer.flush();
-        // std.time.sleep(10_000);
+    while (true) {
+        if (queue.mutex.tryLock()) {
+            if (queue.get()) |frame| {
+                var terminal_buffer = std.io.bufferedWriter(std.io.getStdOut().writer());
+                _ = try terminal_buffer.write(frame.data.buffer.items);
+                try terminal_buffer.flush();
+            }
+        }
     }
 
     removeTempFiles();
