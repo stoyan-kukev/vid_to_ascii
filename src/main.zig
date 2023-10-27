@@ -35,8 +35,11 @@ pub fn main() !void {
     try resizeVideo(allocator, file_url);
 
     var queue = std.atomic.Queue(frame_pak.Frame).init();
+    var current_frame = std.atomic.Atomic(u32).init(0);
 
     while (true) {
+        var thread = try std.Thread.spawn(.{}, makeImage, .{ allocator, &current_frame, queue });
+        thread.join();
         if (queue.mutex.tryLock()) {
             if (queue.get()) |frame| {
                 var terminal_buffer = std.io.bufferedWriter(std.io.getStdOut().writer());
@@ -59,7 +62,10 @@ fn removeTempFiles() void {
     };
 }
 
-fn makeImage(allocator: std.mem.Allocator, frame: usize) !void {
+fn makeImage(allocator: std.mem.Allocator, frame_num: *std.atomic.Atomic(u32), queue: std.atomic.Queue(frame_pak.Frame)) !void {
+    const frame = frame_num.load(std.atomic.Ordering.Acquire);
+    frame_num.store(frame + 1, std.atomic.Ordering.Release);
+
     const filter = try std.fmt.allocPrint(allocator, "select=eq(n\\, {})", .{frame});
     const output = try std.fmt.allocPrint(allocator, ".temp/.temp{}.png", .{frame});
     defer allocator.free(filter);
@@ -70,30 +76,16 @@ fn makeImage(allocator: std.mem.Allocator, frame: usize) !void {
     proc.stderr_behavior = .Ignore;
     try proc.spawn();
     _ = try proc.wait();
-}
 
-fn resizeVideo(alloc: std.mem.Allocator, file_url: []const u8) !void {
-    var terminal_size = try terminal.getTerminalSizeEven();
-
-    const size = try std.fmt.allocPrint(alloc, "scale={}:{}", .{ terminal_size.rows, terminal_size.cols });
-    defer alloc.free(size);
-
-    var proc = std.ChildProcess.init(&.{ "ffmpeg", "-i", file_url, "-vf", size, ".temp/.temp.mp4" }, alloc);
-    proc.stdout_behavior = .Ignore;
-    proc.stderr_behavior = .Ignore;
-    try proc.spawn();
-    _ = try proc.wait();
-}
-
-fn imageToFrame(allocator: std.mem.Allocator, file_name: []const u8) !std.ArrayList(u8) {
-    var image = try zigimg.Image.fromFilePath(allocator, file_name);
+    var image = try zigimg.Image.fromFilePath(allocator, output);
+    defer image.deinit();
     var buffer = std.ArrayList(u8).init(allocator);
 
     var iter = image.iterator();
     while (iter.next()) |pix| {
         const avg = 1.0 / @as(f32, chars.len);
         const i = iter.current_index;
-        var pix_value = (pix.r + pix.b + pix.g) / 3;
+        var pix_value = (pix.r + pix.b + pix.g + pix.a) / 4;
         var index: usize = @intFromFloat(pix_value / avg);
         if (index == chars.len) {
             index -= 1;
@@ -106,7 +98,25 @@ fn imageToFrame(allocator: std.mem.Allocator, file_name: []const u8) !std.ArrayL
         }
     }
 
-    print("here", .{});
+    if (queue.mutex.tryLock()) {
+        queue.put(frame_pak.Frame{ .buffer = buffer });
+    }
 
-    return buffer;
+    std.fs.cwd().deleteFile(output) catch |err| switch (err) {
+        error.FileNotFound => std.os.exit(0),
+        else => {},
+    };
+}
+
+fn resizeVideo(allocator: std.mem.Allocator, file_url: []const u8) !void {
+    var terminal_size = try terminal.getTerminalSizeEven();
+
+    const size = try std.fmt.allocPrint(allocator, "scale={}:{}", .{ terminal_size.rows, terminal_size.cols });
+    defer allocator.free(size);
+
+    var proc = std.ChildProcess.init(&.{ "ffmpeg", "-i", file_url, "-vf", size, ".temp/.temp.mp4" }, allocator);
+    proc.stdout_behavior = .Ignore;
+    proc.stderr_behavior = .Ignore;
+    try proc.spawn();
+    _ = try proc.wait();
 }
