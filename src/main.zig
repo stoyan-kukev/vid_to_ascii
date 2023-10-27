@@ -33,20 +33,23 @@ pub fn main() !void {
 
     // resize video to terminal size
     try resizeVideo(allocator, file_url);
+    std.log.info("  main: before main thread", .{});
 
-    var queue = std.atomic.Queue(frame_pak.Frame).init();
-    var current_frame = std.atomic.Atomic(u32).init(0);
+    var queue = @constCast(&std.atomic.Queue(frame_pak.Frame).init());
+    var current_frame = @constCast(&std.atomic.Atomic(u32).init(0));
 
     while (true) {
-        var thread = try std.Thread.spawn(.{}, makeImage, .{ allocator, &current_frame, queue });
-        thread.join();
-        if (queue.mutex.tryLock()) {
-            if (queue.get()) |frame| {
-                var terminal_buffer = std.io.bufferedWriter(std.io.getStdOut().writer());
-                _ = try terminal_buffer.write(frame.data.buffer.items);
-                try terminal_buffer.flush();
-            }
+        std.log.info("main  : before main thread mutexlock", .{});
+        var thread = try std.Thread.spawn(.{}, makeImage, .{ allocator, current_frame, queue.* });
+        std.log.info("main  : before thread join", .{});
+        queue.mutex.lock();
+        if (queue.head) |node| {
+            var terminal_buffer = std.io.bufferedWriter(std.io.getStdOut().writer());
+            _ = try terminal_buffer.write(node.data.buffer.items);
+            try terminal_buffer.flush();
         }
+        queue.mutex.unlock();
+        thread.join();
     }
 
     removeTempFiles();
@@ -63,8 +66,11 @@ fn removeTempFiles() void {
 }
 
 fn makeImage(allocator: std.mem.Allocator, frame_num: *std.atomic.Atomic(u32), queue: std.atomic.Queue(frame_pak.Frame)) !void {
+    var queue_ref = @constCast(&queue);
+    const Frame = frame_pak.Frame;
     const frame = frame_num.load(std.atomic.Ordering.Acquire);
     frame_num.store(frame + 1, std.atomic.Ordering.Release);
+    std.log.info("thread: in frame {}", .{frame_num.load(std.atomic.Ordering.Acquire)});
 
     const filter = try std.fmt.allocPrint(allocator, "select=eq(n\\, {})", .{frame});
     const output = try std.fmt.allocPrint(allocator, ".temp/.temp{}.png", .{frame});
@@ -74,8 +80,8 @@ fn makeImage(allocator: std.mem.Allocator, frame_num: *std.atomic.Atomic(u32), q
     var proc = std.ChildProcess.init(&.{ "ffmpeg", "-i", ".temp/.temp.mp4", "-vf", filter, "-frames:v", "1", output }, allocator);
     proc.stdout_behavior = .Ignore;
     proc.stderr_behavior = .Ignore;
-    try proc.spawn();
-    _ = try proc.wait();
+    _ = try proc.spawnAndWait();
+    std.log.info("thread: Created image", .{});
 
     var image = try zigimg.Image.fromFilePath(allocator, output);
     defer image.deinit();
@@ -98,8 +104,16 @@ fn makeImage(allocator: std.mem.Allocator, frame_num: *std.atomic.Atomic(u32), q
         }
     }
 
-    if (queue.mutex.tryLock()) {
-        queue.put(frame_pak.Frame{ .buffer = buffer });
+    std.log.info("thread: Before mutex lock", .{});
+    queue_ref.mutex.lock();
+    defer queue_ref.mutex.unlock();
+    std.log.info("thread: adding head of queue -> {}", .{queue_ref});
+    if (queue_ref.head) |head| {
+        std.log.info("thread: changing queue head -> {}", .{head.data});
+        head.next = @constCast(&std.atomic.Queue(Frame).Node{ .data = Frame{ .buffer = buffer }, .prev = head, .next = null });
+    } else {
+        queue_ref.head =
+            @constCast(&std.atomic.Queue(Frame).Node{ .data = Frame{ .buffer = buffer }, .prev = null, .next = null });
     }
 
     std.fs.cwd().deleteFile(output) catch |err| switch (err) {
@@ -111,7 +125,7 @@ fn makeImage(allocator: std.mem.Allocator, frame_num: *std.atomic.Atomic(u32), q
 fn resizeVideo(allocator: std.mem.Allocator, file_url: []const u8) !void {
     var terminal_size = try terminal.getTerminalSizeEven();
 
-    const size = try std.fmt.allocPrint(allocator, "scale={}:{}", .{ terminal_size.rows, terminal_size.cols });
+    const size = try std.fmt.allocPrint(allocator, "scale={}:{}", .{ terminal_size.cols, terminal_size.rows });
     defer allocator.free(size);
 
     var proc = std.ChildProcess.init(&.{ "ffmpeg", "-i", file_url, "-vf", size, ".temp/.temp.mp4" }, allocator);
