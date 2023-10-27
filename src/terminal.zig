@@ -12,6 +12,29 @@ pub fn getTerminalSize() !TerminalSize {
     return unixGetSize();
 }
 
+pub fn clearTerminal(allocator: std.mem.Allocator) !void {
+    var proc = undefined;
+    if (@import("builtin").os.tag == .windows) {
+        proc = std.ChildProcess.init(&.{"clear"}, allocator);
+    } else {
+        proc = std.ChildProcess.init(&.{"cls"}, allocator);
+    }
+    try proc.spawn();
+    _ = try proc.wait();
+}
+
+pub fn getTerminalSizeEven() !TerminalSize {
+    var terminal_size = try getTerminalSize();
+    if (terminal_size.rows % 2 != 0) {
+        terminal_size.rows -= 1;
+    }
+    if (terminal_size.cols % 2 != 0) {
+        terminal_size.cols -= 1;
+    }
+
+    return terminal_size;
+}
+
 fn winGetSize() !TerminalSize {
     var info: std.os.windows.CONSOLE_SCREEN_BUFFER_INFO = undefined;
     if (std.os.windows.kernel32.GetConsoleScreenBufferInfo(std.io.getStdOut().handle, &info) != std.os.windows.TRUE) {

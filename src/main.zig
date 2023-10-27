@@ -66,24 +66,6 @@ fn removeTempFiles() void {
     };
 }
 
-fn clearTty(alloc: std.mem.Allocator) !void {
-    var proc = std.ChildProcess.init(&.{"clear"}, alloc);
-    try proc.spawn();
-    _ = try proc.wait();
-}
-
-fn getEvenTtySize(size: terminal.TerminalSize) terminal.TerminalSize {
-    var terminal_size = size;
-    if (terminal_size.rows % 2 != 0) {
-        terminal_size.rows -= 1;
-    }
-    if (terminal_size.cols % 2 != 0) {
-        terminal_size.cols -= 1;
-    }
-
-    return terminal_size;
-}
-
 fn makeImage(allocator: std.mem.Allocator, frame: usize) !void {
     const filter = try std.fmt.allocPrint(allocator, "select=eq(n\\, {})", .{frame});
     const output = try std.fmt.allocPrint(allocator, ".temp/.temp{}.png", .{frame});
@@ -98,7 +80,7 @@ fn makeImage(allocator: std.mem.Allocator, frame: usize) !void {
 }
 
 fn resizeVideo(alloc: std.mem.Allocator, file_url: []const u8) !void {
-    var terminal_size = getEvenTtySize(try terminal.getTerminalSize());
+    var terminal_size = try terminal.getTerminalSizeEven();
 
     const size = try std.fmt.allocPrint(alloc, "scale={}:{}", .{ terminal_size.rows, terminal_size.cols });
     defer alloc.free(size);
