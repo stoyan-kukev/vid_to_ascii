@@ -13,14 +13,13 @@ pub fn getTerminalSize() !TerminalSize {
 }
 
 pub fn clearTerminal(allocator: std.mem.Allocator) !void {
-    var proc = undefined;
     if (@import("builtin").os.tag == .windows) {
-        proc = std.ChildProcess.init(&.{"clear"}, allocator);
+        var proc = std.ChildProcess.init(&.{"cls"}, allocator);
+        _ = try proc.spawnAndWait();
     } else {
-        proc = std.ChildProcess.init(&.{"cls"}, allocator);
+        var proc = std.ChildProcess.init(&.{"clear"}, allocator);
+        _ = try proc.spawnAndWait();
     }
-    try proc.spawn();
-    _ = try proc.wait();
 }
 
 pub fn getTerminalSizeEven() !TerminalSize {

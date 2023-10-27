@@ -1,0 +1,34 @@
+
+    var queue = @constCast(&std.atomic.Queue(frame_pak.Frame).init());
+    var current_frame = @constCast(&std.atomic.Atomic(u32).init(0));
+
+    while (true) {
+        std.log.info("main  : before main thread mutexlock", .{});
+        var thread = try std.Thread.spawn(.{}, makeImage, .{ allocator, current_frame, queue.* });
+        std.log.info("main  : before thread join", .{});
+        queue.mutex.lock();
+        if (queue.head) |node| {
+            var terminal_buffer = std.io.bufferedWriter(std.io.getStdOut().writer());
+            _ = try terminal_buffer.write(node.data.buffer.items);
+            try terminal_buffer.flush();
+        }
+        queue.mutex.unlock();
+        thread.join();
+    }
+
+    var queue_ref = @constCast(&queue);
+    const Frame = frame_pak.Frame;
+    const frame = frame_num.load(std.atomic.Ordering.Acquire);
+    frame_num.store(frame + 1, std.atomic.Ordering.Release);
+    std.log.info("thread: in frame {}", .{frame_num.load(std.atomic.Ordering.Acquire)});
+    std.log.info("thread: Before mutex lock", .{});
+    queue_ref.mutex.lock();
+    defer queue_ref.mutex.unlock();
+    std.log.info("thread: adding head of queue -> {}", .{queue_ref});
+    if (queue_ref.head) |head| {
+        std.log.info("thread: changing queue head -> {}", .{head.data});
+        head.next = @constCast(&std.atomic.Queue(Frame).Node{ .data = Frame{ .buffer = buffer }, .prev = head, .next = null });
+    } else {
+        queue_ref.head =
+            @constCast(&std.atomic.Queue(Frame).Node{ .data = Frame{ .buffer = buffer }, .prev = null, .next = null });
+    }

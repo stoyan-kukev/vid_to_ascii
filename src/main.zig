@@ -1,10 +1,8 @@
 const std = @import("std");
 const zigimg = @import("zigimg");
 const terminal = @import("terminal.zig");
-const frame_pak = @import("frame.zig");
+const frame = @import("frame.zig");
 
-const log = std.log;
-const print = std.debug.print;
 const stdout = std.io.getStdOut().writer();
 
 const chars = " .:-=+*#%$8@";
@@ -21,7 +19,7 @@ pub fn main() !void {
     defer std.process.argsFree(allocator, args);
 
     if (args.len < 2) {
-        log.err("usage: vid_to_ascii path_to_video", .{});
+        std.log.err("usage: vid_to_ascii path_to_video", .{});
         return Err.MissingArguments;
     }
     const file_url = args[1];
@@ -33,23 +31,14 @@ pub fn main() !void {
 
     // resize video to terminal size
     try resizeVideo(allocator, file_url);
-    std.log.info("  main: before main thread", .{});
 
-    var queue = @constCast(&std.atomic.Queue(frame_pak.Frame).init());
-    var current_frame = @constCast(&std.atomic.Atomic(u32).init(0));
-
-    while (true) {
-        std.log.info("main  : before main thread mutexlock", .{});
-        var thread = try std.Thread.spawn(.{}, makeImage, .{ allocator, current_frame, queue.* });
-        std.log.info("main  : before thread join", .{});
-        queue.mutex.lock();
-        if (queue.head) |node| {
-            var terminal_buffer = std.io.bufferedWriter(std.io.getStdOut().writer());
-            _ = try terminal_buffer.write(node.data.buffer.items);
-            try terminal_buffer.flush();
-        }
-        queue.mutex.unlock();
-        thread.join();
+    var current: u32 = 0;
+    while (true) : (current += 1) {
+        try terminal.clearTerminal(allocator);
+        var terminal_buffer = std.io.bufferedWriter(std.io.getStdOut().writer());
+        var data = try makeImage(allocator, current);
+        _ = try terminal_buffer.write(data.items);
+        try terminal_buffer.flush();
     }
 
     removeTempFiles();
@@ -65,23 +54,15 @@ fn removeTempFiles() void {
     };
 }
 
-fn makeImage(allocator: std.mem.Allocator, frame_num: *std.atomic.Atomic(u32), queue: std.atomic.Queue(frame_pak.Frame)) !void {
-    var queue_ref = @constCast(&queue);
-    const Frame = frame_pak.Frame;
-    const frame = frame_num.load(std.atomic.Ordering.Acquire);
-    frame_num.store(frame + 1, std.atomic.Ordering.Release);
-    std.log.info("thread: in frame {}", .{frame_num.load(std.atomic.Ordering.Acquire)});
-
-    const filter = try std.fmt.allocPrint(allocator, "select=eq(n\\, {})", .{frame});
-    const output = try std.fmt.allocPrint(allocator, ".temp/.temp{}.png", .{frame});
+fn makeImage(allocator: std.mem.Allocator, num: u32) !std.ArrayList(u8) {
+    const filter = try std.fmt.allocPrint(allocator, "select=eq(n\\, {})", .{num});
+    const output = ".temp/.temp.png";
     defer allocator.free(filter);
-    defer allocator.free(output);
 
     var proc = std.ChildProcess.init(&.{ "ffmpeg", "-i", ".temp/.temp.mp4", "-vf", filter, "-frames:v", "1", output }, allocator);
     proc.stdout_behavior = .Ignore;
     proc.stderr_behavior = .Ignore;
     _ = try proc.spawnAndWait();
-    std.log.info("thread: Created image", .{});
 
     var image = try zigimg.Image.fromFilePath(allocator, output);
     defer image.deinit();
@@ -104,22 +85,12 @@ fn makeImage(allocator: std.mem.Allocator, frame_num: *std.atomic.Atomic(u32), q
         }
     }
 
-    std.log.info("thread: Before mutex lock", .{});
-    queue_ref.mutex.lock();
-    defer queue_ref.mutex.unlock();
-    std.log.info("thread: adding head of queue -> {}", .{queue_ref});
-    if (queue_ref.head) |head| {
-        std.log.info("thread: changing queue head -> {}", .{head.data});
-        head.next = @constCast(&std.atomic.Queue(Frame).Node{ .data = Frame{ .buffer = buffer }, .prev = head, .next = null });
-    } else {
-        queue_ref.head =
-            @constCast(&std.atomic.Queue(Frame).Node{ .data = Frame{ .buffer = buffer }, .prev = null, .next = null });
-    }
-
     std.fs.cwd().deleteFile(output) catch |err| switch (err) {
         error.FileNotFound => std.os.exit(0),
         else => {},
     };
+
+    return buffer;
 }
 
 fn resizeVideo(allocator: std.mem.Allocator, file_url: []const u8) !void {
