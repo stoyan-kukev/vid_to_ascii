@@ -35,9 +35,8 @@ pub fn main() !void {
     var current: u32 = 0;
     while (true) : (current += 1) {
         try terminal.clearTerminal(allocator);
+        try makeImage(allocator, current);
         var terminal_buffer = std.io.bufferedWriter(std.io.getStdOut().writer());
-        var data = try makeImage(allocator, current);
-        _ = try terminal_buffer.write(data.items);
         try terminal_buffer.flush();
     }
 
@@ -54,7 +53,7 @@ fn removeTempFiles() void {
     };
 }
 
-fn makeImage(allocator: std.mem.Allocator, num: u32) !std.ArrayList(u8) {
+fn makeImage(allocator: std.mem.Allocator, num: u32) !void {
     const filter = try std.fmt.allocPrint(allocator, "select=eq(n\\, {})", .{num});
     const output = ".temp/.temp.png";
     defer allocator.free(filter);
@@ -66,7 +65,7 @@ fn makeImage(allocator: std.mem.Allocator, num: u32) !std.ArrayList(u8) {
 
     var image = try zigimg.Image.fromFilePath(allocator, output);
     defer image.deinit();
-    var buffer = std.ArrayList(u8).init(allocator);
+    var terminal_buffer = std.io.bufferedWriter(std.io.getStdOut().writer());
 
     var iter = image.iterator();
     while (iter.next()) |pix| {
@@ -79,9 +78,9 @@ fn makeImage(allocator: std.mem.Allocator, num: u32) !std.ArrayList(u8) {
         }
 
         if (i % image.width == 0) {
-            try buffer.append('\n');
+            _ = try terminal_buffer.write(&.{'\n'});
         } else {
-            try buffer.append(chars[index]);
+            _ = try terminal_buffer.write(&.{chars[index]});
         }
     }
 
@@ -89,8 +88,6 @@ fn makeImage(allocator: std.mem.Allocator, num: u32) !std.ArrayList(u8) {
         error.FileNotFound => std.os.exit(0),
         else => {},
     };
-
-    return buffer;
 }
 
 fn resizeVideo(allocator: std.mem.Allocator, file_url: []const u8) !void {

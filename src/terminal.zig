@@ -1,6 +1,13 @@
 const std = @import("std");
 
 const TerSizeError = error{GetTerminalSizeFailed};
+const terminal_clear_command = blk: {
+    if (@import("builtin").os.tag == .windows) {
+        break :blk "cls";
+    } else {
+        break :blk "clear";
+    }
+};
 
 pub const TerminalSize = struct {
     rows: u16,
@@ -13,13 +20,13 @@ pub fn getTerminalSize() !TerminalSize {
 }
 
 pub fn clearTerminal(allocator: std.mem.Allocator) !void {
-    if (@import("builtin").os.tag == .windows) {
-        var proc = std.ChildProcess.init(&.{"cls"}, allocator);
-        _ = try proc.spawnAndWait();
-    } else {
-        var proc = std.ChildProcess.init(&.{"clear"}, allocator);
-        _ = try proc.spawnAndWait();
-    }
+    // if (@import("builtin").os.tag == .windows) {
+    //     var proc = std.ChildProcess.init(&.{"cls"}, allocator);
+    //     _ = try proc.spawnAndWait();
+    // } else {
+    var proc = std.ChildProcess.init(&.{terminal_clear_command}, allocator);
+    _ = try proc.spawnAndWait();
+    // }
 }
 
 pub fn getTerminalSizeEven() !TerminalSize {
